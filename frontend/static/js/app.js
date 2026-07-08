@@ -1,4 +1,5 @@
-const { createApp, ref, computed, onMounted } = Vue;
+const { createApp, ref, reactive, computed, onMounted } = Vue;
+const { createRouter, createWebHistory } = VueRouter;
 
 const API = {
     patients: {
@@ -20,271 +21,268 @@ const API = {
     },
 };
 
-createApp({
+function insuranceBadge(type) {
+    if (type === 'Private') return 'text-purple-400 bg-purple-400/10 px-2 py-0.5 rounded-full text-xs font-medium';
+    if (type === 'Public') return 'text-sky-400 bg-sky-400/10 px-2 py-0.5 rounded-full text-xs font-medium';
+    return 'text-slate-500 bg-slate-500/10 px-2 py-0.5 rounded-full text-xs font-medium';
+}
+
+function statusBadge(status) {
+    const map = {
+        pending: 'text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded-full text-xs font-medium',
+        confirmed: 'text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded-full text-xs font-medium',
+        completed: 'text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded-full text-xs font-medium',
+        cancelled: 'text-rose-400 bg-rose-400/10 px-2 py-0.5 rounded-full text-xs font-medium',
+    };
+    return map[status] || map.pending;
+}
+
+const Dashboard = {
+    template: '#dashboard-template',
     setup() {
-        const activeTab = ref('patients');
-        const isLoading = ref(true);
+        const stats = reactive({ patients: 0, doctors: 0, appointments: 0 });
+        const recentAppointments = ref([]);
 
+        async function fetchStats() {
+            try {
+                const [p, d, a] = await Promise.all([
+                    fetch(API.patients.get).then(r => r.json()),
+                    fetch(API.doctors.get).then(r => r.json()),
+                    fetch(API.appointments.get).then(r => r.json()),
+                ]);
+                stats.patients = Array.isArray(p) ? p.length : 0;
+                stats.doctors = Array.isArray(d) ? d.length : 0;
+                stats.appointments = Array.isArray(a) ? a.length : 0;
+                recentAppointments.value = Array.isArray(a) ? a.slice(-5).reverse() : [];
+            } catch (e) {
+                console.error('Dashboard fetch error:', e);
+            }
+        }
+
+        onMounted(fetchStats);
+
+        return { stats, recentAppointments, statusBadge };
+    },
+};
+
+const PatientsList = {
+    template: '#patients-list-template',
+    setup() {
         const patientsList = ref([]);
-        const doctorsList = ref([]);
-        const appointmentsList = ref([]);
-
-        const deleteId = ref('');
-        const deleteDoctorId = ref('');
-        const isEditing = ref(false);
-
-        const patientForm = ref({
-            fullName: '', email: '', phone: '', age: '',
-            diagnosis: '', insuranceType: '', registrationDate: '', isActive: true,
-        });
-
-        const doctorForm = ref({
-            fullName: '', specialty: '', licenseNumber: '',
-            rating: '', email: '', phone: '', isActive: true,
-        });
-
-        const appointmentForm = ref({
-            patientId: '', doctorId: '', therapyId: '',
-            date: '', time: '', status: 'pending', symptoms: '', isActive: true,
-        });
-
-        function tabClass(tab) {
-            return activeTab.value === tab
-                ? 'bg-slate-900 border-b-2 border-emerald-500 text-emerald-400'
-                : 'text-slate-500 hover:text-slate-300 hover:bg-slate-900/50';
-        }
-
-        function insuranceBadge(type) {
-            if (type === 'Private') return 'text-purple-400 bg-purple-400/10 px-2 py-0.5 rounded-full text-xs font-medium';
-            if (type === 'Public') return 'text-sky-400 bg-sky-400/10 px-2 py-0.5 rounded-full text-xs font-medium';
-            return 'text-slate-500 bg-slate-500/10 px-2 py-0.5 rounded-full text-xs font-medium';
-        }
-
-        function statusBadge(status) {
-            const map = {
-                pending: 'text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded-full text-xs font-medium',
-                confirmed: 'text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded-full text-xs font-medium',
-                completed: 'text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded-full text-xs font-medium',
-                cancelled: 'text-rose-400 bg-rose-400/10 px-2 py-0.5 rounded-full text-xs font-medium',
-            };
-            return map[status] || map.pending;
-        }
-
-        function switchTab(tab) {
-            activeTab.value = tab;
-            if (tab === 'patients') fetchPatients();
-            else if (tab === 'doctors') fetchDoctors();
-            else if (tab === 'appointments') fetchAppointments();
-        }
+        const isLoading = ref(true);
+        const editForm = reactive({ id: null, fullName: '', email: '', phone: '', age: '', diagnosis: '', insuranceType: '' });
 
         async function fetchPatients() {
             isLoading.value = true;
             try {
-                const res = await fetch(API.patients.get);
-                const data = await res.json();
-                patientsList.value = data;
+                const r = await fetch(API.patients.get);
+                patientsList.value = await r.json();
             } catch (e) {
-                console.error('GET patients error:', e);
+                console.error('Fetch patients error:', e);
             } finally {
                 isLoading.value = false;
             }
         }
 
-        async function fetchOrderedPatients() {
-            isLoading.value = true;
-            try {
-                const res = await fetch(API.patients.get + '/ordered');
-                const data = await res.json();
-                patientsList.value = data;
-            } catch (e) {
-                console.error('GET ordered error:', e);
-            } finally {
-                isLoading.value = false;
-            }
+        function startEdit(p) {
+            editForm.id = p.id;
+            editForm.fullName = p.fullName || '';
+            editForm.email = p.email || '';
+            editForm.phone = p.phone || '';
+            editForm.age = p.age || '';
+            editForm.diagnosis = p.diagnosis || '';
+            editForm.insuranceType = p.insuranceType || '';
         }
 
-        async function fetchPatientCategories() {
-            isLoading.value = true;
-            try {
-                const res = await fetch(API.patients.get + '/categories');
-                const data = await res.json();
-                patientsList.value = [...(data.active || []), ...(data.inactive || [])];
-            } catch (e) {
-                console.error('GET categories error:', e);
-            } finally {
-                isLoading.value = false;
-            }
+        function cancelEdit() {
+            editForm.id = null;
         }
 
-        async function fetchPatientsByCategory(status) {
-            isLoading.value = true;
+        async function updatePatient() {
             try {
-                const res = await fetch(API.patients.get + '/category/' + status);
-                const data = await res.json();
-                patientsList.value = data;
-            } catch (e) {
-                console.error('GET category error:', e);
-            } finally {
-                isLoading.value = false;
-            }
-        }
-
-        async function savePatient() {
-            try {
-                const url = isEditing.value
-                    ? API.patients.put + '/' + patientForm.value.id
-                    : API.patients.post;
-                const method = isEditing.value ? 'PUT' : 'POST';
-                const body = { ...patientForm.value };
-                if (!body.registrationDate) {
-                    const d = new Date();
-                    const dd = String(d.getDate()).padStart(2, '0');
-                    const mm = String(d.getMonth() + 1).padStart(2, '0');
-                    const yyyy = d.getFullYear();
-                    body.registrationDate = dd + '/' + mm + '/' + yyyy;
-                }
-                await fetch(url, {
-                    method,
+                const body = { ...editForm };
+                await fetch(API.patients.put + '/' + editForm.id, {
+                    method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body),
                 });
-                resetPatientForm();
+                cancelEdit();
                 await fetchPatients();
             } catch (e) {
-                console.error('Save patient error:', e);
+                console.error('Update patient error:', e);
             }
         }
 
-        async function deletePatient() {
-            if (!deleteId.value) return;
+        async function removePatient(id) {
+            if (!confirm('Delete patient #' + id + '?')) return;
             try {
-                await fetch(API.patients.delete + '/' + deleteId.value, { method: 'DELETE' });
-                deleteId.value = '';
+                await fetch(API.patients.delete + '/' + id, { method: 'DELETE' });
                 await fetchPatients();
             } catch (e) {
                 console.error('Delete patient error:', e);
             }
         }
 
-        function editPatient(p) {
-            isEditing.value = true;
-            patientForm.value = {
-                id: p.id,
-                fullName: p.fullName || '',
-                email: p.email || '',
-                phone: p.phone || '',
-                age: p.age || '',
-                diagnosis: p.diagnosis || '',
-                insuranceType: p.insuranceType || '',
-                registrationDate: p.registrationDate || '',
-                isActive: p.isActive !== undefined ? p.isActive : true,
-            };
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+        onMounted(fetchPatients);
+
+        return { patientsList, isLoading, editForm, startEdit, cancelEdit, updatePatient, removePatient, insuranceBadge };
+    },
+};
+
+const PatientCreate = {
+    template: '#patient-create-template',
+    setup() {
+        const router = VueRouter.useRouter();
+        const form = reactive({
+            fullName: '', email: '', phone: '', age: '',
+            diagnosis: '', insuranceType: '',
+        });
+
+        async function createPatient() {
+            try {
+                const body = { ...form };
+                const d = new Date();
+                body.registrationDate =
+                    String(d.getDate()).padStart(2, '0') + '/' +
+                    String(d.getMonth() + 1).padStart(2, '0') + '/' +
+                    d.getFullYear();
+                await fetch(API.patients.post, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                router.push('/patients');
+            } catch (e) {
+                console.error('Create patient error:', e);
+            }
         }
 
-        function resetPatientForm() {
-            isEditing.value = false;
-            patientForm.value = {
-                fullName: '', email: '', phone: '', age: '',
-                diagnosis: '', insuranceType: '', registrationDate: '', isActive: true,
-            };
-        }
+        return { form, createPatient };
+    },
+};
+
+const DoctorsList = {
+    template: '#doctors-list-template',
+    setup() {
+        const doctorsList = ref([]);
+        const isLoading = ref(true);
 
         async function fetchDoctors() {
             isLoading.value = true;
             try {
-                const res = await fetch(API.doctors.get);
-                const data = await res.json();
-                doctorsList.value = data;
+                const r = await fetch(API.doctors.get);
+                doctorsList.value = await r.json();
             } catch (e) {
-                console.error('GET doctors error:', e);
+                console.error('Fetch doctors error:', e);
             } finally {
                 isLoading.value = false;
             }
         }
 
-        async function saveDoctor() {
+        onMounted(fetchDoctors);
+
+        return { doctorsList, isLoading };
+    },
+};
+
+const DoctorCreate = {
+    template: '#doctor-create-template',
+    setup() {
+        const router = VueRouter.useRouter();
+        const form = reactive({
+            fullName: '', specialty: '', licenseNumber: '',
+            rating: '', email: '', phone: '',
+        });
+
+        async function createDoctor() {
             try {
-                const body = { ...doctorForm.value };
+                const body = { ...form };
                 await fetch(API.doctors.post, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body),
                 });
-                resetDoctorForm();
-                await fetchDoctors();
+                router.push('/doctors');
             } catch (e) {
-                console.error('Save doctor error:', e);
+                console.error('Create doctor error:', e);
             }
         }
 
-        async function deleteDoctorAction() {
-            if (!deleteDoctorId.value) return;
-            try {
-                await fetch(API.doctors.delete + '/' + deleteDoctorId.value, { method: 'DELETE' });
-                deleteDoctorId.value = '';
-                await fetchDoctors();
-            } catch (e) {
-                console.error('Delete doctor error:', e);
-            }
-        }
+        return { form, createDoctor };
+    },
+};
 
-        function resetDoctorForm() {
-            doctorForm.value = {
-                fullName: '', specialty: '', licenseNumber: '',
-                rating: '', email: '', phone: '', isActive: true,
-            };
-        }
+const AppointmentsList = {
+    template: '#appointments-list-template',
+    setup() {
+        const appointmentsList = ref([]);
+        const isLoading = ref(true);
 
         async function fetchAppointments() {
             isLoading.value = true;
             try {
-                const res = await fetch(API.appointments.get);
-                const data = await res.json();
-                appointmentsList.value = data;
+                const r = await fetch(API.appointments.get);
+                appointmentsList.value = await r.json();
             } catch (e) {
-                console.error('GET appointments error:', e);
+                console.error('Fetch appointments error:', e);
             } finally {
                 isLoading.value = false;
             }
         }
 
-        async function saveAppointment() {
+        onMounted(fetchAppointments);
+
+        return { appointmentsList, isLoading, statusBadge };
+    },
+};
+
+const AppointmentCreate = {
+    template: '#appointment-create-template',
+    setup() {
+        const router = VueRouter.useRouter();
+        const form = reactive({
+            patientId: '', doctorId: '', therapyId: '',
+            date: '', time: '', status: 'pending', symptoms: '',
+        });
+
+        async function createAppointment() {
             try {
-                const body = { ...appointmentForm.value };
+                const body = { ...form };
                 await fetch(API.appointments.post, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body),
                 });
-                resetAppointmentForm();
-                await fetchAppointments();
+                router.push('/appointments');
             } catch (e) {
-                console.error('Save appointment error:', e);
+                console.error('Create appointment error:', e);
             }
         }
 
-        function resetAppointmentForm() {
-            appointmentForm.value = {
-                patientId: '', doctorId: '', therapyId: '',
-                date: '', time: '', status: 'pending', symptoms: '', isActive: true,
-            };
-        }
-
-        onMounted(() => {
-            fetchPatients();
-        });
-
-        return {
-            activeTab, isLoading,
-            patientsList, doctorsList, appointmentsList,
-            deleteId, deleteDoctorId, isEditing,
-            patientForm, doctorForm, appointmentForm,
-            tabClass, insuranceBadge, statusBadge, switchTab,
-            fetchPatients, fetchOrderedPatients, fetchPatientCategories, fetchPatientsByCategory,
-            savePatient, deletePatient, editPatient, resetPatientForm,
-            fetchDoctors, saveDoctor, deleteDoctorAction, resetDoctorForm,
-            fetchAppointments, saveAppointment, resetAppointmentForm,
-        };
+        return { form, createAppointment };
     },
-}).mount('#app');
+};
+
+const routes = [
+    { path: '/', redirect: '/home' },
+    { path: '/home', component: Dashboard },
+    { path: '/patients', component: PatientsList },
+    { path: '/patient/create', component: PatientCreate },
+    { path: '/doctors', component: DoctorsList },
+    { path: '/doctor/create', component: DoctorCreate },
+    { path: '/appointments', component: AppointmentsList },
+    { path: '/appointment/create', component: AppointmentCreate },
+];
+
+const router = createRouter({
+    history: createWebHistory(),
+    routes,
+});
+
+const app = createApp({
+    data() {
+        return { mobileOpen: false };
+    },
+});
+app.use(router);
+app.mount('#app');
