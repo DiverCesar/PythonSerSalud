@@ -1,0 +1,978 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+The content has been processed where security check has been disabled.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Security check has been disabled - content may contain sensitive information
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+api-delete-service/
+  routes/
+    deleteRoutes.js
+  package.json
+  server.js
+api-get-service/
+  routes/
+    getRoutes.js
+  package.json
+  server.js
+api-post-service/
+  routes/
+    postRoutes.js
+  package.json
+  server.js
+api-put-service/
+  routes/
+    putRoutes.js
+  package.json
+  server.js
+db-service/
+  models/
+    Schema.js
+  routes/
+    dbRoutes.js
+  package.json
+  server.js
+frontend-service/
+  css/
+    styles.css
+  js/
+    app.js
+  index.html
+.gitignore
+LICENSE
+README.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="api-delete-service/routes/deleteRoutes.js">
+const express = require("express");
+const router = express.Router();
+
+router.delete(`/${process.env.APP_NAME}/${process.env.ITEM_SINGULAR}/:id`, async (req, res) => {
+    try {
+        const response = await fetch(`http://${process.env.DB_HOST || 'localhost'}:${process.env.PORT_DB}/db/${process.env.ITEM_SINGULAR}/${req.params.id}`, {
+            method: "DELETE"
+        });
+        const data = await response.json();
+        res.status(response.status).json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+module.exports = router;
+</file>
+
+<file path="api-delete-service/package.json">
+{
+  "name": "microservice-module-apideleteservice",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.18.2",
+    "mongoose": "^8.0.0"
+  }
+}
+</file>
+
+<file path="api-delete-service/server.js">
+require("dotenv").config({ path: "../.env" });
+const express = require("express");
+const cors = require("cors");
+const deleteRoutes = require("./routes/deleteRoutes");
+
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+app.use("/", deleteRoutes);
+
+app.listen(process.env.PORT_DELETE, () => {
+    console.log(`[SUCCESS] ${process.env.APP_NAME} API DELETE Service is up and running for ${process.env.ITEM_PLURAL} on port ${process.env.PORT_DELETE}`);
+});
+</file>
+
+<file path="api-get-service/routes/getRoutes.js">
+const express = require("express");
+const router = express.Router();
+
+const fetchData = async () => {
+    const response = await fetch(`http://${process.env.DB_HOST || 'localhost'}:${process.env.PORT_DB}/db/${process.env.ITEM_PLURAL}`);
+    return await response.json();
+};
+
+const calculateTimeElapsed = (dateString) => {
+    if (!dateString) return { years: 0, months: 0, days: 0 };
+    const [day, month, year] = dateString.split("/");
+    const itemDate = new Date(year, month - 1, day);
+    const currentDate = new Date();
+    
+    let years = currentDate.getFullYear() - itemDate.getFullYear();
+    let months = currentDate.getMonth() - itemDate.getMonth();
+    let days = currentDate.getDate() - itemDate.getDate();
+
+    if (days < 0) {
+        months -= 1;
+        const previousMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 0);
+        days += previousMonth.getDate();
+    }
+    if (months < 0) {
+        years -= 1;
+        months += 12;
+    }
+    return { years, months, days };
+};
+
+const parseAndSortData = (data) => {
+    const processedData = data.map(item => {
+        const [day, month, year] = item.date.split("/");
+        return { ...item, parsedDate: new Date(year, month - 1, day) };
+    });
+    return processedData.sort((a, b) => b.parsedDate - a.parsedDate);
+};
+
+router.get(`/${process.env.APP_NAME}/${process.env.ITEM_PLURAL}`, async (req, res) => {
+    try {
+        const data = await fetchData();
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.get(`/${process.env.APP_NAME}/${process.env.ITEM_PLURAL}/ordered`, async (req, res) => {
+    try {
+        const data = await fetchData();
+        const sortedData = parseAndSortData(data);
+        
+        const finalData = sortedData.map(item => {
+            const addedAgo = calculateTimeElapsed(item.date);
+            delete item.parsedDate;
+            return { ...item, addedAgo };
+        });
+        
+        res.json(finalData);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.get(`/${process.env.APP_NAME}/${process.env.ITEM_PLURAL}/categories`, async (req, res) => {
+    try {
+        const data = await fetchData();
+        const sortedData = parseAndSortData(data);
+        
+        const result = sortedData.reduce((acc, item) => {
+            delete item.parsedDate;
+            if (item.isActive) acc.active.push(item);
+            else acc.inactive.push(item);
+            return acc;
+        }, { active: [], inactive: [] });
+        
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.get(`/${process.env.APP_NAME}/${process.env.ITEM_PLURAL}/category/:status`, async (req, res) => {
+    try {
+        const { status } = req.params;
+        if (status !== 'valid' && status !== 'invalid') {
+            return res.status(400).json({ error: "Invalid status" });
+        }
+        
+        const data = await fetchData();
+        const sortedData = parseAndSortData(data);
+        const isTargetActive = status === 'valid';
+        
+        const filteredData = sortedData.filter(item => item.isActive === isTargetActive).map(item => {
+            delete item.parsedDate;
+            return item;
+        });
+        
+        res.json(filteredData);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+module.exports = router;
+</file>
+
+<file path="api-get-service/package.json">
+{
+  "name": "microservice-module-apigetservice",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.18.2",
+    "mongoose": "^8.0.0"
+  }
+}
+</file>
+
+<file path="api-get-service/server.js">
+require("dotenv").config({ path: "../.env" });
+const express = require("express");
+const cors = require("cors");
+const getRoutes = require("./routes/getRoutes");
+
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+app.use("/", getRoutes);
+
+app.listen(process.env.PORT_GET, () => {
+    console.log(`[SUCCESS] ${process.env.APP_NAME} API GET Service is up and running for ${process.env.ITEM_PLURAL} on port ${process.env.PORT_GET}`);
+});
+</file>
+
+<file path="api-post-service/routes/postRoutes.js">
+const express = require("express");
+const router = express.Router();
+
+router.post(`/${process.env.APP_NAME}/${process.env.ITEM_SINGULAR}`, async (req, res) => {
+    try {
+        const response = await fetch(`http://${process.env.DB_HOST || 'localhost'}:${process.env.PORT_DB}/db/${process.env.ITEM_SINGULAR}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(req.body)
+        });
+        const data = await response.json();
+        res.status(response.status).json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+module.exports = router;
+</file>
+
+<file path="api-post-service/package.json">
+{
+  "name": "microservice-module-apipostservice",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.18.2",
+    "mongoose": "^8.0.0"
+  }
+}
+</file>
+
+<file path="api-post-service/server.js">
+require("dotenv").config({ path: "../.env" });
+const express = require("express");
+const cors = require("cors");
+const postRoutes = require("./routes/postRoutes");
+
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+app.use("/", postRoutes);
+
+app.listen(process.env.PORT_POST, () => {
+    console.log(`[SUCCESS] ${process.env.APP_NAME} API POST Service is up and running for ${process.env.ITEM_PLURAL} on port ${process.env.PORT_POST}`);
+});
+</file>
+
+<file path="api-put-service/routes/putRoutes.js">
+const express = require("express");
+const router = express.Router();
+
+router.put(`/${process.env.APP_NAME}/${process.env.ITEM_SINGULAR}/:id`, async (req, res) => {
+    try {
+        const response = await fetch(`http://${process.env.DB_HOST || 'localhost'}:${process.env.PORT_DB}/db/${process.env.ITEM_SINGULAR}/${req.params.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(req.body)
+        });
+        const data = await response.json();
+        res.status(response.status).json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+module.exports = router;
+</file>
+
+<file path="api-put-service/package.json">
+{
+  "name": "microservice-module-apiputservice",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.18.2",
+    "mongoose": "^8.0.0"
+  }
+}
+</file>
+
+<file path="api-put-service/server.js">
+require("dotenv").config({ path: "../.env" });
+const express = require("express");
+const cors = require("cors");
+const putRoutes = require("./routes/putRoutes");
+
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+app.use("/", putRoutes);
+
+app.listen(process.env.PORT_PUT, () => {
+    console.log(`[SUCCESS] ${process.env.APP_NAME} API PUT Service is up and running for ${process.env.ITEM_PLURAL} on port ${process.env.PORT_PUT}`);
+});
+</file>
+
+<file path="db-service/models/Schema.js">
+const mongoose = require("mongoose");
+
+const dataSchema = new mongoose.Schema(
+    {
+        id: { type: Number, required: true },
+        name: { type: String, required: true },
+        brand: { type: String },
+        model: { type: String },
+        price: { type: Number },
+        date: { type: String, required: true },
+        description: { type: String },
+        isActive: { type: Boolean, required: true }
+    },
+    { 
+        collection: process.env.ITEM_PLURAL,
+        versionKey: false
+    }
+);
+
+module.exports = mongoose.model("Data", dataSchema);
+</file>
+
+<file path="db-service/routes/dbRoutes.js">
+const express = require("express");
+const router = express.Router();
+const Data = require("../models/Schema");
+
+router.get(`/${process.env.ITEM_PLURAL}`, async (req, res) => {
+    try {
+        const data = await Data.find();
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.post(`/${process.env.ITEM_SINGULAR}`, async (req, res) => {
+    try {
+        const newData = new Data(req.body);
+        const savedData = await newData.save();
+        res.status(201).json(savedData);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+router.put(`/${process.env.ITEM_SINGULAR}/:id`, async (req, res) => {
+    try {
+        const updatedData = await Data.findOneAndUpdate(
+            { id: req.params.id },
+            req.body,
+            { new: true }
+        );
+        if (!updatedData) return res.status(404).json({ error: "Not found" });
+        res.json(updatedData);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+router.delete(`/${process.env.ITEM_SINGULAR}/:id`, async (req, res) => {
+    try {
+        const deletedData = await Data.findOneAndDelete({ id: req.params.id });
+        if (!deletedData) return res.status(404).json({ error: "Not found" });
+        res.json({ message: "Deleted" });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+module.exports = router;
+</file>
+
+<file path="db-service/package.json">
+{
+  "name": "microservice-module-dbservice",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.18.2",
+    "mongoose": "^8.0.0"
+  }
+}
+</file>
+
+<file path="db-service/server.js">
+require("dotenv").config({ path: "../.env" });
+const express = require("express");
+const mongoose = require("mongoose");
+const cors = require("cors");
+const dbRoutes = require("./routes/dbRoutes");
+
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+mongoose.connect(process.env.MONGO_URI, {
+    dbName: process.env.APP_NAME
+});
+
+app.use("/db", dbRoutes);
+
+app.listen(process.env.PORT_DB, () => {
+    console.log(`[SUCCESS] MongoDB Connection established. Database Service running on port ${process.env.PORT_DB}`);
+});
+</file>
+
+<file path="frontend-service/css/styles.css">
+[v-cloak] {
+    display: none;
+}
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #0f172a; 
+}
+
+::-webkit-scrollbar-thumb {
+    background: #334155; 
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #475569; 
+}
+</file>
+
+<file path="frontend-service/js/app.js">
+const { createApp, ref, computed, onMounted } = Vue;
+
+const App = {
+    setup() {
+        const API_GET = 'http://localhost:4001/computerstore/customers';
+        const API_POST = 'http://localhost:4002/computerstore/customer';
+        const API_PUT = 'http://localhost:4003/computerstore/customer';
+        const API_DELETE = 'http://localhost:4004/computerstore/customer';
+        
+        const customers = ref([]);
+        const isLoading = ref(true);
+        const deleteId = ref('');
+        const isEditing = ref(false);
+        
+        const formData = ref({
+            id: '',
+            name: '',
+            age: '',
+            moneySpent: '',
+            email: ''
+        });
+
+        const fetchCustomers = async () => {
+            try {
+                const response = await fetch(API_GET);
+                const data = await response.json();
+                customers.value = data;
+            } catch (error) {
+                console.error("GET Error:", error);
+            } finally {
+                isLoading.value = false;
+            }
+        };
+
+        const saveCustomer = async () => {
+            try {
+                const url = isEditing.value ? `${API_PUT}/${formData.value.id}` : API_POST;
+                const method = isEditing.value ? "PUT" : "POST";
+                
+                await fetch(url, {
+                    method: method,
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(formData.value)
+                });
+                
+                resetForm();
+                await fetchCustomers();
+            } catch (error) {
+                console.error("Save Error:", error);
+            }
+        };
+
+        const deleteCustomer = async () => {
+            if (!deleteId.value) return;
+            try {
+                await fetch(`${API_DELETE}/${deleteId.value}`, { method: "DELETE" });
+                deleteId.value = '';
+                await fetchCustomers();
+            } catch (error) {
+                console.error("Delete Error:", error);
+            }
+        };
+
+        const editCustomer = (user) => {
+            isEditing.value = true;
+            formData.value = {
+                id: user.id || '',
+                name: user.name || user.fullName || '',
+                age: user.age || '',
+                moneySpent: user.moneySpent || user.totalSale || '',
+                email: user.email || ''
+            };
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+
+        const resetForm = () => {
+            isEditing.value = false;
+            formData.value = { id: '', name: '', age: '', moneySpent: '', email: '' };
+        };
+
+        const totalRevenue = computed(() => {
+            return customers.value.reduce((acc, curr) => {
+                const amount = curr.moneySpent !== undefined ? curr.moneySpent : (curr.totalSale || 0);
+                return acc + Number(amount);
+            }, 0);
+        });
+
+        const formatCurrency = (value) => {
+            return Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        };
+
+        onMounted(() => {
+            fetchCustomers();
+        });
+
+        return {
+            customers,
+            isLoading,
+            formData,
+            deleteId,
+            isEditing,
+            totalRevenue,
+            saveCustomer,
+            deleteCustomer,
+            editCustomer,
+            resetForm,
+            formatCurrency
+        };
+    }
+};
+
+createApp(App).mount('#app');
+</file>
+
+<file path="frontend-service/index.html">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Dashboard | Cloud Architecture</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="./css/styles.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    animation: { 'fade-in': 'fadeIn 0.5s ease-out' },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0', transform: 'translateY(10px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' }
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-950 text-slate-300 font-sans min-h-screen p-8 selection:bg-cyan-500 selection:text-white">
+    <div id="app" class="max-w-7xl mx-auto animate-fade-in" v-cloak>
+        
+        <header class="relative overflow-hidden bg-slate-900/50 backdrop-blur-xl border border-slate-800 rounded-3xl p-8 mb-8 shadow-2xl flex flex-col md:flex-row justify-between items-center gap-8">
+            <div class="absolute top-0 right-0 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl -mr-20 -mt-20"></div>
+            <div class="z-10 flex items-center gap-6">
+                <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/30">
+                    <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-3xl font-bold text-white tracking-tight">Cloud Microservices Hub</h1>
+                    <p class="text-slate-400 font-medium tracking-wide text-sm mt-1">Distributed Architecture Dashboard</p>
+                </div>
+            </div>
+            <div class="z-10 text-right border-l border-slate-700/50 pl-8">
+                <h2 class="text-slate-400 text-xs font-bold tracking-[0.2em] uppercase mb-2">Total System Revenue</h2>
+                <div class="text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500">
+                    ${{ formatCurrency(totalRevenue) }}
+                </div>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg col-span-2">
+                <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Add / Update Customer</label>
+                <form @submit.prevent="saveCustomer" class="grid grid-cols-2 gap-4">
+                    <input type="number" v-model="formData.id" placeholder="ID" class="bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500" required>
+                    <input type="text" v-model="formData.name" placeholder="Name" class="bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500">
+                    <input type="number" v-model="formData.age" placeholder="Age" class="bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500">
+                    <input type="number" step="0.01" v-model="formData.moneySpent" placeholder="Money Spent" class="bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500">
+                    <input type="email" v-model="formData.email" placeholder="Email" class="bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500 col-span-2">
+                    <div class="col-span-2 flex gap-4">
+                        <button type="submit" class="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white font-semibold py-2 rounded-lg transition-colors">Submit (POST/PUT)</button>
+                        <button type="button" @click="resetForm" class="bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2 px-6 rounded-lg transition-colors">Clear</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-lg flex flex-col justify-center">
+                <label class="block text-xs font-bold text-rose-400 uppercase tracking-wider mb-3">Delete Customer</label>
+                <form @submit.prevent="deleteCustomer" class="flex flex-col gap-3">
+                    <input type="number" v-model="deleteId" placeholder="Enter ID to Delete" class="bg-slate-950 border border-rose-900 rounded-lg px-4 py-2 text-sm text-slate-200 focus:outline-none focus:border-rose-500" required>
+                    <button type="submit" class="bg-rose-600 hover:bg-rose-500 text-white font-semibold py-2 rounded-lg transition-colors">Delete Record</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-slate-950/50 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
+                            <th class="p-5 font-semibold">ID</th>
+                            <th class="p-5 font-semibold">Customer Name</th>
+                            <th class="p-5 font-semibold">Email</th>
+                            <th class="p-5 font-semibold">Age</th>
+                            <th class="p-5 font-semibold">Investment</th>
+                            <th class="p-5 font-semibold">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-800/50">
+                        <tr v-if="isLoading">
+                            <td colspan="6" class="p-10 text-center text-slate-500">Connecting to API Gateway...</td>
+                        </tr>
+                        <tr v-for="user in customers" :key="user._id" class="group transition-all duration-300 hover:bg-slate-800/50">
+                            <td class="p-5 font-mono text-sm text-cyan-400">{{ user.id || 'N/A' }}</td>
+                            <td class="p-5 text-slate-200">{{ user.name || user.fullName || 'N/A' }}</td>
+                            <td class="p-5 text-sm text-slate-400">{{ user.email || 'N/A' }}</td>
+                            <td class="p-5 font-mono text-sm text-slate-300">{{ user.age || 'N/A' }}</td>
+                            <td class="p-5 font-mono text-emerald-400">
+                                <span v-if="user.moneySpent !== undefined || user.totalSale !== undefined">
+                                    ${{ formatCurrency(user.moneySpent || user.totalSale || 0) }}
+                                </span>
+                                <span v-else class="text-rose-500">N/A</span>
+                            </td>
+                            <td class="p-5">
+                                <button @click="editCustomer(user)" class="text-xs bg-slate-700 hover:bg-slate-600 text-white px-3 py-1 rounded transition-colors">Edit</button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <script src="./js/app.js"></script>
+</body>
+</html>
+</file>
+
+<file path=".gitignore">
+node_modules/
+</file>
+
+<file path="LICENSE">
+Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "[]"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+</file>
+
+<file path="README.md">
+# exam_u2_template
+Project practice for ESPE - AWD 30716 April - July 2026
+</file>
+
+</files>

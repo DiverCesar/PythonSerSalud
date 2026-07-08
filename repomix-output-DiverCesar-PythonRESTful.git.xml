@@ -1,0 +1,671 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+The content has been processed where security check has been disabled.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Security check has been disabled - content may contain sensitive information
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+routes/
+  appointments.py
+database.py
+LICENSE
+main.py
+models.py
+Procfile
+README.md
+requirements.txt
+seed_data.py
+validators.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="routes/appointments.py">
+from datetime import datetime
+from bson import ObjectId
+from fastapi import APIRouter, Query, HTTPException, status
+from fastapi.responses import JSONResponse
+from database import database
+from models import AppointmentRequest, AppointmentUpdateRequest, CancelRequest
+from validators import validate_date_format, validate_time_format, validate_min_anticipation
+
+router = APIRouter()
+
+def parse_mongo_document(document):
+    if not document:
+        return None
+    document["id"] = str(document.pop("_id"))
+    return document
+
+async def fetch_entity_by_id(collection_name: str, entity_id: str):
+    document = await database[collection_name].find_one({"_id": ObjectId(entity_id)})
+    return parse_mongo_document(document)
+
+@router.get("/available-schedules")
+async def fetch_available_schedules(
+    doctorId: str = Query(..., description="ID del doctor"),
+    date: str = Query(..., description="Fecha en formato YYYY-MM-DD")
+):
+    if not validate_date_format(date):
+        raise HTTPException(status_code=400, detail="El formato de fecha debe ser YYYY-MM-DD")
+
+    try:
+        target_date = datetime.strptime(date, "%Y-%m-%d")
+        day_index = target_date.weekday()
+
+        # Buscar horarios del doctor
+        active_schedules = await database.work_schedules.find({
+            "doctorId": doctorId,
+            "dayOfWeek": day_index,
+            "active": True
+        }).to_list(length=None)
+
+        if not active_schedules:
+            return []
+
+        # Buscar citas ya ocupadas
+        existing_appointments = await database.appointments.find({
+            "doctorId": doctorId,
+            "date": date,
+            "status": {"$in": ["pending", "confirmed"]}
+        }).to_list(length=None)
+
+        booked_times = {appt.get("time") for appt in existing_appointments}
+        slots = []
+
+        for schedule in active_schedules:
+            start_hour, start_min = map(int, schedule["startTime"].split(":"))
+            end_hour, end_min = map(int, schedule["endTime"].split(":"))
+            
+            current_h, current_m = start_hour, start_min
+
+            while current_h < end_hour or (current_h == end_hour and current_m < end_min):
+                time_formatted = f"{current_h:02d}:{current_m:02d}"
+                is_free = time_formatted not in booked_times
+                
+                try:
+                    if is_free:
+                        validate_min_anticipation(date, time_formatted)
+                except ValueError:
+                    is_free = False
+
+                slots.append({
+                    "date": date,
+                    "time": time_formatted,
+                    "available": is_free,
+                    "doctorId": doctorId
+                })
+                
+                current_m += 30
+                if current_m >= 60:
+                    current_h += 1
+                    current_m = 0
+
+        return slots
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"detail": str(e)})
+
+@router.get("/")
+async def list_appointments(
+    status: str = Query(None),
+    patientId: str = Query(None),
+    doctorId: str = Query(None)
+):
+    query_filters = {}
+    if status:
+        query_filters["status"] = status
+    if patientId:
+        query_filters["patientId"] = patientId
+    if doctorId:
+        query_filters["doctorId"] = doctorId
+
+    cursor = database.appointments.find(query_filters).sort([("date", -1)])
+    records = await cursor.to_list(length=None)
+    
+    response_data = []
+    for record in records:
+        parsed_record = parse_mongo_document(record)
+        parsed_record["patient"] = await fetch_entity_by_id("patients", parsed_record.get("patientId", ""))
+        parsed_record["doctor"] = await fetch_entity_by_id("doctors", parsed_record.get("doctorId", ""))
+        parsed_record["therapy"] = await fetch_entity_by_id("therapies", parsed_record.get("therapyId", ""))
+        response_data.append(parsed_record)
+
+    return response_data
+
+@router.post("/", status_code=status.HTTP_201_CREATED)
+async def schedule_appointment(payload: AppointmentRequest):
+    if not validate_date_format(payload.date) or not validate_time_format(payload.time):
+        raise HTTPException(status_code=400, detail="Formato de fecha u hora inválido")
+        
+    # Lógica simplificada para inserción de citas
+    appointment_data = payload.dict()
+    appointment_data["status"] = "pending"
+    appointment_data["createdAt"] = datetime.utcnow()
+    
+    result = await database.appointments.insert_one(appointment_data)
+    appointment_data["_id"] = result.inserted_id
+    
+    return parse_mongo_document(appointment_data)
+</file>
+
+<file path="database.py">
+import os
+from motor.motor_asyncio import AsyncIOMotorClient
+from dotenv import load_dotenv
+
+load_dotenv()
+
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+DB_NAME = os.getenv("DB_NAME", "clinic_management")
+
+db_client = AsyncIOMotorClient(MONGO_URI)
+database = db_client[DB_NAME]
+</file>
+
+<file path="LICENSE">
+Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "[]"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+</file>
+
+<file path="main.py">
+import os
+import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from routes.appointments import router as appointments_router
+
+app = FastAPI(
+    title="Clinic Management System API",
+    description="RESTful API para la gestión de citas y terapias",
+    version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Aquí establecemos la ruta base que usted solicitó
+app.include_router(appointments_router, prefix="/api/appointments", tags=["Appointments"])
+
+@app.get("/")
+def api_root():
+    return {
+        "service": "Clinic Management API - Active",
+        "documentation": "/docs"
+    }
+
+@app.get("/health-check")
+def health_check():
+    return {"status": "ok"}
+
+if __name__ == "__main__":
+    puerto = int(os.environ.get("PORT", 4000))
+    uvicorn.run("main:app", host="0.0.0.0", port=puerto, reload=True)
+</file>
+
+<file path="models.py">
+from datetime import date, datetime
+from typing import Optional
+from pydantic import BaseModel, Field
+
+
+class PatientInfo(BaseModel):
+    id: str
+    fullName: str
+    nationalId: str
+    email: str
+    phone: str
+    insuranceType: str
+
+
+class DoctorInfo(BaseModel):
+    id: str
+    fullName: str
+    specialty: str
+    licenseNumber: str
+    rating: float
+    email: str
+    phone: str
+
+
+class TherapyInfo(BaseModel):
+    id: str
+    name: str
+    description: str
+    specialty: str
+    duration: int
+    price: float
+
+
+class AppointmentResponse(BaseModel):
+    id: str
+    patientId: str
+    doctorId: str
+    therapyId: str
+    date: str
+    time: str
+    status: str
+    symptoms: str
+    hasExams: bool
+    exams: list
+    cancellationReason: Optional[str] = None
+    doctorNotes: Optional[str] = None
+    createdAt: datetime
+    updatedAt: datetime
+    patient: Optional[PatientInfo] = None
+    doctor: Optional[DoctorInfo] = None
+    therapy: Optional[TherapyInfo] = None
+
+
+class AppointmentRequest(BaseModel):
+    doctorId: str
+    therapyId: str
+    date: str
+    time: str
+    symptoms: str
+    hasExams: bool = False
+    exams: list = []
+
+
+class AppointmentUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    doctorNotes: Optional[str] = None
+
+
+class CancelRequest(BaseModel):
+    reason: str
+
+
+class AvailableSlot(BaseModel):
+    date: str
+    time: str
+    available: bool
+    doctorId: str
+
+
+class CreateAppointmentResponse(BaseModel):
+    message: str
+    appointment: dict
+</file>
+
+<file path="Procfile">
+web: uvicorn main:app --host 0.0.0.0 --port $PORT
+</file>
+
+<file path="README.md">
+# Clinic Management API
+RESTful API desarrollada en Python usando FastAPI y MongoDB para la gestión integral de un centro de rehabilitación clínica.
+
+## Tecnologías Utilizadas
+- Python 3.10+
+- FastAPI
+- MongoDB (Motor Asyncio)
+- Uvicorn
+
+## Instalación y Ejecución Local
+1. Clonar el repositorio.
+2. Instalar las dependencias: `pip install -r requirements.txt`
+3. Crear un archivo `.env` en la raíz con su `MONGO_URI`.
+4. Ejecutar el servidor: `uvicorn main:app --reload --port 4000`
+
+## Estructura de URIs
+El sistema respeta principios RESTful. Ejemplo de consulta de disponibilidad:
+`GET /api/appointments/available-schedules?doctorId={id}&date={YYYY-MM-DD}`
+</file>
+
+<file path="requirements.txt">
+fastapi
+uvicorn[standard]
+motor
+pymongo
+python-dotenv
+pydantic
+</file>
+
+<file path="seed_data.py">
+patients_data = [
+    {"fullName": "Carlos Rivera", "nationalId": "1234567890", "email": "carlos.rivera@email.com", "phone": "0999123456", "insuranceType": "Public"},
+    {"fullName": "Maria Torres", "nationalId": "1234567891", "email": "maria.torres@email.com", "phone": "0999123457", "insuranceType": "Private"},
+    {"fullName": "Juan Perez", "nationalId": "1234567892", "email": "juan.perez@email.com", "phone": "0999123458", "insuranceType": "Public"},
+    {"fullName": "Ana Gomez", "nationalId": "1234567893", "email": "ana.gomez@email.com", "phone": "0999123459", "insuranceType": "Private"},
+    {"fullName": "Luis Martinez", "nationalId": "1234567894", "email": "luis.martinez@email.com", "phone": "0999123460", "insuranceType": "Public"},
+    {"fullName": "Sofia Lopez", "nationalId": "1234567895", "email": "sofia.lopez@email.com", "phone": "0999123461", "insuranceType": "Private"},
+    {"fullName": "Diego Hernandez", "nationalId": "1234567896", "email": "diego.hernandez@email.com", "phone": "0999123462", "insuranceType": "Public"},
+    {"fullName": "Valentina Diaz", "nationalId": "1234567897", "email": "valentina.diaz@email.com", "phone": "0999123463", "insuranceType": "Private"},
+    {"fullName": "Andres Silva", "nationalId": "1234567898", "email": "andres.silva@email.com", "phone": "0999123464", "insuranceType": "Public"},
+    {"fullName": "Camila Castro", "nationalId": "1234567899", "email": "camila.castro@email.com", "phone": "0999123465", "insuranceType": "Private"},
+    {"fullName": "Miguel Angel Ruiz", "nationalId": "1234567900", "email": "miguel.ruiz@email.com", "phone": "0999123466", "insuranceType": "Public"},
+    {"fullName": "Laura Jimenez", "nationalId": "1234567901", "email": "laura.jimenez@email.com", "phone": "0999123467", "insuranceType": "Private"},
+    {"fullName": "Roberto Sanchez", "nationalId": "1234567902", "email": "roberto.sanchez@email.com", "phone": "0999123468", "insuranceType": "Public"},
+    {"fullName": "Daniela Morales", "nationalId": "1234567903", "email": "daniela.morales@email.com", "phone": "0999123469", "insuranceType": "Private"},
+    {"fullName": "Fernando Ortiz", "nationalId": "1234567904", "email": "fernando.ortiz@email.com", "phone": "0999123470", "insuranceType": "Public"},
+]
+
+doctors_data = [
+    {"fullName": "Dr. Ricardo Mendoza", "specialty": "Fisioterapia Deportiva", "licenseNumber": "FIS-001", "rating": 4.8, "email": "ricardo.mendoza@sersalud.com", "phone": "0999000111"},
+    {"fullName": "Dra. Patricia Vega", "specialty": "Fisioterapia Neurol\u00f3gica", "licenseNumber": "FIS-002", "rating": 4.9, "email": "patricia.vega@sersalud.com", "phone": "0999000222"},
+    {"fullName": "Dr. Alberto Campos", "specialty": "Fisioterapia Ortop\u00e9dica", "licenseNumber": "FIS-003", "rating": 4.7, "email": "alberto.campos@sersalud.com", "phone": "0999000333"},
+    {"fullName": "Dra. Sofia Rios", "specialty": "Fisioterapia Pedi\u00e1trica", "licenseNumber": "FIS-004", "rating": 4.6, "email": "sofia.rios@sersalud.com", "phone": "0999000444"},
+    {"fullName": "Dr. Manuel Flores", "specialty": "Fisioterapia Geri\u00e1trica", "licenseNumber": "FIS-005", "rating": 4.5, "email": "manuel.flores@sersalud.com", "phone": "0999000555"},
+]
+
+therapies_data = [
+    {"name": "Terapia Manual", "description": "T\u00e9cnicas manuales para aliviar dolor y mejorar movilidad", "specialty": "Fisioterapia General", "duration": 45, "price": 45.00},
+    {"name": "Electroterapia", "description": "Uso de corriente el\u00e9ctrica para estimulaci\u00f3n muscular", "specialty": "Fisioterapia General", "duration": 30, "price": 35.00},
+    {"name": "Ultrasonido Terap\u00e9utico", "description": "Ondas sonoras para tratar lesiones profundas", "specialty": "Fisioterapia General", "duration": 20, "price": 30.00},
+    {"name": "Rehabilitaci\u00f3n Deportiva", "description": "Programa especializado para recuperaci\u00f3n de atletas", "specialty": "Fisioterapia Deportiva", "duration": 60, "price": 60.00},
+    {"name": "Terapia Neurol\u00f3gica", "description": "Rehabilitaci\u00f3n para pacientes con trastornos neurol\u00f3gicos", "specialty": "Fisioterapia Neurol\u00f3gica", "duration": 50, "price": 55.00},
+    {"name": "Rehabilitaci\u00f3n Ortop\u00e9dica", "description": "Recuperaci\u00f3n post-operatoria y lesiones ortop\u00e9dicas", "specialty": "Fisioterapia Ortop\u00e9dica", "duration": 45, "price": 50.00},
+    {"name": "Fisioterapia Pedi\u00e1trica", "description": "Terapia especializada para ni\u00f1os", "specialty": "Fisioterapia Pedi\u00e1trica", "duration": 40, "price": 40.00},
+    {"name": "Fisioterapia Geri\u00e1trica", "description": "Cuidado fisioterap\u00e9utico para adultos mayores", "specialty": "Fisioterapia Geri\u00e1trica", "duration": 45, "price": 42.00},
+]
+
+symptoms_list = [
+    "Dolor lumbar cr\u00f3nico con irradiaci\u00f3n a pierna derecha, dificultad para estar sentado por m\u00e1s de 30 minutos",
+    "Esguince de tobillo grado II con inflamaci\u00f3n significativa y dificultad para apoyar el pie",
+    "Dolor cervical intenso con cefalea tensional, empeora con movimientos de rotaci\u00f3n",
+    "Hombro congelado con limitaci\u00f3n severa de la movilidad, no puede elevar el brazo m\u00e1s all\u00e1 de 90 grados",
+    "Lumbalgia aguda post-esfuerzo con espasmo muscular paravertebral bilateral",
+    "Contractura muscular en trapecio superior con puntos gatillo activos que irradian a cabeza",
+    "Fractura de mu\u00f1eca en etapa de rehabilitaci\u00f3n, necesita recuperar rango de movimiento completo",
+    "Dolor patelofemoral bilateral al subir escaleras y despu\u00e9s de estar sentado prolongadamente",
+    "Tendinitis aquiliana cr\u00f3nica con dolor matutino que mejora con actividad ligera",
+    "Rehabilitaci\u00f3n post-operatoria de rodilla derecha, necesita recuperar flexi\u00f3n completa",
+    "Dolor en hombro izquierdo con signos de pinzamiento subacromial al realizar movimientos por encima de la cabeza",
+    "Pie plano valgo bilateral con dolor en arco plantar despu\u00e9s de largas jornadas de pie",
+    "Cervicalgia cr\u00f3nica con v\u00e9rtigo ocasional y limitaci\u00f3n de la movilidad cervical",
+    "Epicondilitis lateral derecha (codo de tenista) con dolor al realizar movimientos de extensi\u00f3n de mu\u00f1eca",
+    "Dolor sacroil\u00edaco unilateral que empeora al estar sentado en superficies duras",
+    "Rehabilitaci\u00f3n neurol\u00f3gica post-ACV con hemiparesia izquierda y espasticidad",
+    "Dolor neurop\u00e1tico en miembro superior derecho secundario a hernia cervical C5-C6",
+    "S\u00edndrome del t\u00fanel carpiano bilateral con parestesias nocturnas y debilidad en la mano",
+    "Dolor en cadera derecha con signos de bursitis trocant\u00e9rica al caminar distancias largas",
+    "Escoliosis lumbar con descompensaci\u00f3n p\u00e9lvica y dolor cr\u00f3nico en regi\u00f3n lumbosacra",
+    "Fascitis plantar cr\u00f3nica con dolor intenso en los primeros pasos de la ma\u00f1ana",
+    "Rehabilitaci\u00f3n post-fractura de h\u00famero proximal con limitaci\u00f3n de la abducci\u00f3n del hombro",
+]
+</file>
+
+<file path="validators.py">
+import re
+from datetime import datetime, timedelta
+
+
+def validate_date_format(date_str: str) -> bool:
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
+        return False
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
+def validate_time_format(time_str: str) -> bool:
+    if not re.match(r"^\d{2}:\d{2}$", time_str):
+        return False
+    try:
+        datetime.strptime(time_str, "%H:%M")
+        return True
+    except ValueError:
+        return False
+
+
+def validate_min_anticipation(date_str: str, time_str: str):
+    appointment_dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+    now = datetime.now()
+    min_hours = 24
+    if appointment_dt - now < timedelta(hours=min_hours):
+        raise ValueError(f"Appointments must be scheduled at least {min_hours} hours in advance")
+
+
+def validate_cancellation_lead_time(date_str: str, time_str: str):
+    appointment_dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+    now = datetime.now()
+    min_hours = 2
+    if appointment_dt - now < timedelta(hours=min_hours):
+        raise ValueError(f"Cancellations must be made at least {min_hours} hours before the appointment")
+</file>
+
+</files>
